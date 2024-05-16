@@ -1,0 +1,33 @@
+{
+    "schemaVersion": "2.2",
+    "description": "Document is only to return if Windows OS is pending any reboots",
+    "mainSteps":[
+        {
+            "precondition": {
+                "StringEquals": [
+                "platformType",
+                "Windows"
+            ]
+            },
+            "action": "aws:runPowerShellScript",
+            "name": "runPowerShellScript",
+            "inputs": {
+                "runCommand": [
+                    "$reboot = if(Test-Path -Path \"HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\RebootPending\"){Get-ItemProperty -Path \"HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\RebootPending\"}",
+                    "$required = if(Test-Path-Path \"HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired\"){Get-ItemProperty -Path \"HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired\"}",
+                    "if ($required) {",
+                        "$return = $true",
+                    "} else {",
+                        "if($reboot){",
+                            "$return = $true",
+                        "} else {",
+                            "$return = $false",
+                        "}",
+                    "}",
+                    "Write-Output \"reboot:\" $return"
+                ]
+            }
+        }
+    ]
+    }
+    

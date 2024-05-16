@@ -1,0 +1,92 @@
+{
+    "schemaVersion": "1.2",
+    "description": "Install Windows Updates with Options",
+    "parameters": {
+        "reboothost": {
+            "type": "String",
+            "default": "false",
+            "description": "Reboot the Host System when Update is completed?",
+            "allowedValues": [
+                "false",
+                "true"
+            ]
+        },
+        "win2012url": {
+            "type": "String",
+            "default":"Windows Server 2012 R2 Update URL: Windows Update Catalog Url",
+            "description":"Get the latest Cumulative Update URL from Windows Update Catalog"
+        },
+        "win2016url": {
+            "type": "String",
+            "default":"Windows Server 2016 Update URL: Windows Update Catalog Url",
+            "description":"Get the latest Cumulative Update URL from Windows Update Catalog"
+        },
+        "win2019url": {
+            "type": "String",
+            "default":"Windows Server 2019 Update URL: Windows Update Catalog Url",
+            "description":"Get the latest Cumulative Update URL from Windows Update Catalog"
+        }
+    },
+    "runtimeConfig": {
+        "aws:runPowerShellScript": {
+            "properties": [
+                {
+                    "id":"0.aws:runPowerShellScript",
+                    "timeoutSeconds": 14400,
+                    "runCommand": [
+                        "# Get the OS Version",
+                        "$osv = Get-CimInstance Win32_OperatingSystem",
+                        "",
+                        "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12",
+                        "# Determining Version of OS",
+                        "switch -wildcard ($osv) {",
+                        "    \"*2012*\" {",
+                        "        Write-Host \"WinServ2012R2\"",
+                        "        $url = \"{{ win2012url }}\"",
+                        "    }",
+                        "    \"*2016*\" {",
+                        "        Write-Host \"WinServ2016\"",
+                        "        $url = \"{{ win2016url }}\"",
+                        "    }",
+                        "    \"*2019*\" {",
+                        "        Write-Host \"WinServ2019\"",
+                        "        $url = \"{{ win2019url }}\"",
+                        "    }",
+                        "    Default { Write-Host \"OS Not Valid\" break}",
+                        "}",
+                        "",
+                        "$dir = \"C:\\updates\\\"",
+                        "# Checking for if directory exists and create if not",
+                        "if (-not (Test-Path $dir)) {",
+                        "    New-Item -Path $dir -ItemType Directory",
+                        "}",
+                        "",
+                        "# Downloading msu file",
+                        "$filelist = @()",
+                        "$wc = New-Object System.Net.WebClient",
+                        "foreach($i in $url) {",
+                        "    $filename = Split-Path $i -leaf",
+                        "    $filelist += $filename",
+                        "    $wc.DownloadFile($i, $dir + $filename)",
+                        "}",
+                        "",
+                        "# Installing OS update",
+                        "if ( \"{{ reboothost }}\" ) {",
+                        "    $arg = \"/quiet /norestart\"",
+                        "} else {",
+                        "    $arg = \"/quiet\"",
+                        "}",
+                        "foreach($u in $filelist){",
+                        "    try {",
+                        "        Start-Process -FilePath \"wusa.exe\" -ArgumentList \"$dir$u $arg\" -Wait",
+                        "    } catch {",
+                        "        Write-Host -ForegroundColor Red -BackgroundColor Black \"Installation Failed\"",
+                        "        Write-Host -ForegroundColor Red -BackgroundColor Black \"Please note $kb either try to re-run this script\"",
+                        "    }",
+                        "}"
+                    ]
+                }
+            ]
+        }
+    }
+}

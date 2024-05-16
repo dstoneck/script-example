@@ -1,0 +1,318 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Deploys tool to delete elastic IP that have been unassociated for the given period of time.
+
+Parameters:
+  MaxDays:
+    Description: The maximum number of days an elastic IP can be unassociated
+    Type: Number
+    Default: 180
+  Schedule:
+    Description: Cron schedule to run the automations. Defaults to 0730 UTC (0330 EST).
+    Type: String
+    Default: 'cron(30 07 * * ? *)'
+
+Resources:
+  CleanRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "ssm.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+
+  CleanPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: gtio_clean_eip_policy
+      Roles:
+        - !Ref CleanRole
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - "ec2:ReleaseAddress"
+              - "config:GetComplianceDetailsByConfigRule"
+            Resource:
+              - !Sub 'arn:aws:config:*:${AWS::AccountId}:config-rule/*'
+              - !Sub 'arn:aws:ec2:*:${AWS::AccountId}:elastic-ip/*'
+          - Effect: Allow
+            Action:
+              - 'ec2:DescribeAddresses'
+              - 'config:GetComplianceDetailsByResource'
+            Resource: "*"
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W12
+            reason: "The tool needs to be able to interact with any IP address or config resource"
+
+  CleanDocument:
+    Type: AWS::SSM::Document
+    Properties:
+      Name: 'gtio-clean-up-unused-eip'
+      DocumentType: Automation
+      DocumentFormat: YAML
+      TargetType: '/AWS::EC2::EIP'
+      Content:
+        description: |-
+          # Delete Unassociated Elastic IP Address
+
+          This document will delete all unassociated elastic IP Address that have been disassociated for longer then the MaxDays parameter.
+        schemaVersion: '0.3'
+        assumeRole: !GetAtt CleanRole.Arn
+        parameters:
+          MaxDays:
+            type: Integer
+            description: Maximum number of days an EIP can be unassociated before being deleted.
+        mainSteps:
+          - name: clean_eips
+            action: 'aws:executeScript'
+            inputs:
+              Runtime: python3.8
+              Handler: script_handler
+              InputPayload:
+                max_days: '{{ MaxDays }}'
+              Script: |-
+                import boto3
+                from botocore import client
+                from botocore.exceptions import ClientError
+                from datetime import datetime, timedelta
+                from typing import List, Dict
+
+                try:
+                  boto3.setup_default_session(profile_name='nikirby+mcd_main-Admin')
+                except:
+                  pass
+
+                class UnableToDeleteError(Exception):
+                  def __init__(self, error_list: list):
+                    self.error_list = error_list
+                    self.message = f"Unable to delete one ore more Elastic IP Address: {error_list}"
+                    super().__init__(self.message)
+
+                def get_client(service, region=None) -> client:
+                  """
+                  Get a client for the specified service
+                  :param service: AWS service to generate a client from
+                  :param region: The region for the client
+                  :return: botocore.client
+                  """
+                  try:
+                    if region is None:
+                      service = boto3.client(service)
+                    else:
+                      service = boto3.client(service, region_name=region)
+                  except ClientError as e:
+                    print(f'Unable to create client {service}')
+                    raise
+                  else:
+                    return service
+
+                def delete_eip(eip: str) -> bool:
+                  """
+                  The function will delete the provided EIP
+                  :param eip: The allocation ID of the EIP to be deleted
+                  :return: Returns true or false depending on if the EIP was successfully deleted.
+                  """
+                  ec2 = get_client('ec2')
+                  response = ''
+                  try:
+                    response = ec2.release_address(
+                      AllocationId=eip
+                    )
+                  except Exception as error:
+                    print(f'Unable to delete {eip}')
+                    print(f'{error=}')
+                    print(f'API call {response=}')
+                    return False
+                  else:
+                    print(f'{eip} deleted')
+                    return True
+
+                def get_eips() -> List[str]:
+                  """
+                  Gets all EIPs that are currently NON_COMPLIANT for the rule eip-attached
+                  :return: List of EIP Allocation IDs
+                  """
+                  config = get_client('config')
+                  response = ''
+                  try:
+                    response = config.get_compliance_details_by_config_rule(
+                      ConfigRuleName = 'eip-attached',
+                      ComplianceTypes=[
+                        'NON_COMPLIANT'
+                      ]
+                    )
+                  except Exception as error:
+                    print('Unable to get EIP list')
+                    print(f'{error=}')
+                    print(f'API {response=}')
+                    raise
+                  else:
+                    result_list = []
+                    for result in response['EvaluationResults']:
+                      try:
+                        result_list.append(result['EvaluationResultIdentifier']['EvaluationResultQualifier']['ResourceId'])
+                      except Exception as error:
+                        print('Unable to get EIP resource id')
+                        print(f'{error=}')
+                    return result_list
+
+                def process_eip(eip: str, max_days: int) -> Dict:
+                  """
+                  Takes a list of EIP Association ID and verified they have been unassociated for max_days or greater.
+                  :param eip: Allocation ID of EIP
+                  :param max_days: The maximum number of days an EIP can be unssociated
+                  :return: Dictionary with the EIP allocation ID, if it should be deleted, and if there were errors processing.
+                  """
+                  ec2 = get_client('ec2')
+                  response = '' 
+                  try:
+                    response = ec2.describe_addresses(
+                      AllocationIds = [eip]
+                    )['Addresses'][0]
+                  except Exception as error:
+                    print(f'Unable to describe address of {eip}')
+                    print(f'{error=}')
+                    print(f'API {response=}')
+                    return {
+                      'eip': eip,
+                      'delete': False,
+                      'error' : True
+                    }
+                  else:
+                    print(f'Checking if {eip} has an association')
+                    if 'AssociationId' in response.keys():
+                     print(f'{eip} is associated with a resource.')
+                     return {
+                       'eip': eip,
+                       'delete': False,
+                       'error': False
+                      }
+                  
+                  response = ''
+                  config = get_client('config')
+                  try:
+                    response = config.get_compliance_details_by_resource(
+                      ResourceType = 'AWS::EC2::EIP',
+                      ResourceId = eip
+                    )
+                  except Exception as error:
+                    print(f'Unable to get compliance details for {eip}')
+                    print(f'{error=}')
+                    print(f'API {response=}')
+                    return {
+                      'eip': eip,
+                      'delete': False,
+                      'error' : True
+                    }
+                  else:
+                    change_timestamp = [x['EvaluationResultIdentifier']['OrderingTimestamp'] for x in response['EvaluationResults']
+                                        if x['EvaluationResultIdentifier']['EvaluationResultQualifier']['ConfigRuleName'] == 'eip-attached' ][0]
+                    max_age = datetime.now(change_timestamp.tzinfo) - timedelta(days = max_days)
+                    # The below line is for testing purposes. Uncomment for testing.
+                    # max_age = datetime.now(change_timestamp.tzinfo) - timedelta(minutes = max_days)
+                    if max_age > change_timestamp:
+                      print(f'{eip} has been unassociated for over {max_days} days')
+                      return {
+                        'eip': eip,
+                        'delete': True,
+                       'error': False
+                      }
+                    else:
+                      print(f'{eip} has been not been unassociated for over {max_days} days')
+                      return {
+                        'eip': eip,
+                        'delete': False,
+                       'error': False
+                      }
+
+                def script_handler(events, context):
+                  max_days = events['max_days']
+                  eip_list = get_eips()
+                  delete_list = []
+                  error_list = []
+                  finished_list = []
+                  if len(eip_list) == 0:
+                    print('No unassociated EIPs.')
+                    return {
+                      'deleted_eips': []
+                    }
+                  for eip in eip_list:
+                    output = process_eip(eip, max_days)
+                    if output['error']:
+                      print(f'ERROR: Unable to process {eip}')
+                      error_list.append(eip)
+                    elif output['delete']:
+                      delete_list.append(output['eip'])
+                  print(f'Found {len(delete_list)} eips that qualify for deletion')
+                  for eip in delete_list:
+                    if delete_eip(eip):
+                      finished_list.append(eip)
+                    else:
+                      error_list.append(eip)
+                  if len(error_list) > 0:
+                    raise UnableToDeleteError(error_list)
+                  return {
+                    'deleted_eips': finished_list,
+                    'error_list': error_list
+                  }
+                              
+            outputs:
+              - Name: deleted_eips
+                Selector: $.Payload.deleted_eips
+                Type: StringList
+              - Name: errored_eips
+                Selector: $.Payload.error_list
+                Type: StringList
+
+  EventRuleRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "events.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+
+  EventRulePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: gtio_clean_eip_event_policy
+      Roles:
+        - !Ref EventRuleRole
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - "ssm:StartAutomationExecution"
+            Resource:
+              - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:automation-definition/${CleanDocument}:$LATEST'
+
+  CleanEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: CleanUp-Unused-Elastic-IP-Addresses
+      Description: 'Runs SSM Document to cleanup EIPs daily'
+      EventBusName: default
+      ScheduleExpression: !Ref Schedule
+      State: "ENABLED"
+      Targets:
+        -
+          Arn: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:automation-definition/${CleanDocument}:$LATEST'
+          Id: !Ref CleanDocument
+          RoleArn: !GetAtt EventRuleRole.Arn
+          Input: !Sub '{"MaxDays":["${MaxDays}"]}'

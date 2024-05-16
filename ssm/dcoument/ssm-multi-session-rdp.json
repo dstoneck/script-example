@@ -1,0 +1,61 @@
+{
+    "schemaVersion": "2.2",
+    "description": "Will enable Multi-session RDP on Windows Server ",
+    "parameters": {
+      "system-mode": {
+        "type": "String",
+        "description": "System Licensing Mode: PerUser or PerDevice",
+        "default": "PerUser"
+      },
+      "license-server":{
+        "type": "String",
+        "description":"Licesning Server Address",
+        "default": "licenseserver.corp.dom"
+      },
+      "reboot-host":{
+        "type":"String",
+        "description":"Reboot System (true/false)",
+        "default":"false"
+      }
+    },
+    "mainSteps": [
+      {
+        "precondition": {
+          "StringEquals": [
+            "platformType",
+            "Windows"
+          ]
+        },
+        "action": "aws:runPowerShellScript",
+        "name": "VerifyPendingRebootPatchesAndRebootWindows",
+        "inputs": {
+          "runCommand": [
+            "$sysmode = \"{{ system-mode }}\"",
+            "$licserver = \"{{ license-server }}\"",
+            "$reboothost = \"{{ reboot-host }}\"",
+            "$installfeature = \"rds-rd-server\",\"rds-connection-broker\"",
+            "foreach ($f in $installfeature){",
+            "    $srv = get-windowsfeature $f",
+            "    if($srv.Installed){",
+            "        Write-Output \"Feature Already installed: \" $srv.Name",
+            "    } else {",
+            "        Add-WindowsFeature $f | Out-Null",
+            "    }",
+            "}",
+            "Set-RDLicenseConfiguration -LicenseServer $licserver -Mode $sysmode",
+            "$testconn = Test-NetConnection $licserver -Port 135 -InformationLevel \"Detailed\"",
+            "If($testconn.TcpTestSucceeded){",
+            "    Write-Output \"Instance can reach licensing server\"",
+            "} else {",
+            "    Write-Output \"Firewall ticket needed:\"",
+            "    $ipadd = (Get-NetIPAddress -Addressfamily IPv4 -InterfaceAlias Ethernet).IPAddress",
+            "    Write-Output \"Source: $ipadd `nDestination: $licserver `nPorts: TCP 135, TCP 139, TCP 445, UDP 137-138, TCP 49152 - 65535\"",
+            "}",
+            "if($reboothost -eq 'true'){",
+            "    Restart-Computer",
+            "}"
+          ]
+        }
+      }
+    ]
+  }

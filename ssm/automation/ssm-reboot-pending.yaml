@@ -1,0 +1,153 @@
+description: Check for Pending Reboot
+schemaVersion: '0.3'
+assumeRole: 'arn:aws:iam::{{global:ACCOUNT_ID}}:role/Reboot-Pending-SSM-IAM-Role'
+parameters:
+  InstanceId:
+    type: String
+mainSteps:
+  - name: GetInstance
+    action: 'aws:executeAwsApi'
+    inputs:
+      Service: ssm
+      Api: DescribeInstanceInformation
+      Filters:
+        - Key: InstanceIds
+          Values:
+            - '{{ InstanceId }}'
+    outputs:
+      - Name: myInstance
+        Selector: '$.InstanceInformationList[0].InstanceId'
+        Type: String
+      - Name: platform
+        Selector: '$.InstanceInformationList[0].PlatformType'
+        Type: String
+  - name: ChooseOSforCommands
+    action: 'aws:branch'
+    inputs:
+      Choices:
+        - NextStep: PendingRebootLinux
+          Variable: '{{GetInstance.platform}}'
+          StringEquals: Linux
+        - NextStep: PendingRebootWindows
+          Variable: '{{GetInstance.platform}}'
+          StringEquals: Windows
+  - name: PendingRebootLinux
+    action: 'aws:runCommand'
+    inputs:
+      DocumentName: 'arn:aws:ssm:{{global:REGION}}:905459579470:document/Reboot-Pending-Linux'
+      InstanceIds:
+        - '{{ InstanceId }}'
+    nextStep: ApplyTagsLinux
+    outputs:
+      - Name: LinuxcommandOutput
+        Selector: Output
+        Type: String
+  - name: PendingRebootWindows
+    action: 'aws:runCommand'
+    inputs:
+      DocumentName: 'arn:aws:ssm:{{global:REGION}}:905459579470:document/Reboot-Pending-Windows'
+      InstanceIds:
+        - '{{ InstanceId }}'
+    outputs:
+      - Name: WindowscommandOutput
+        Selector: Output
+        Type: String
+    nextStep: ApplyTagsWindows
+  - name: ApplyTagsLinux
+    action: 'aws:branch'
+    inputs:
+      Choices:
+        - NextStep: PendingRebootTrueLinux
+          Variable: '{{PendingRebootLinux.Output}}'
+          StringEquals: 'True'
+        - NextStep: PendingRebootFalseLinux
+          Variable: '{{PendingRebootLinux.Output}}'
+          StringEquals: 'False'
+        - NextStep: PendingRebootUnknownLinux
+          Variable: '{{PendingRebootLinux.Output}}'
+          StringEquals: Unknown
+  - name: ApplyTagsWindows
+    action: 'aws:branch'
+    inputs:
+      Choices:
+        - NextStep: PendingRebootTrueWindows
+          Variable: '{{PendingRebootWindows.WindowscommandOutput}}'
+          StringEquals: 'True'
+        - NextStep: PendingRebootFalseWindows
+          Variable: '{{PendingRebootWindows.WindowscommandOutput}}'
+          StringEquals: 'False'
+        - NextStep: PendingRebootUnknownWindows
+          Variable: '{{PendingRebootWindows.WindowscommandOutput}}'
+          StringEquals: 'NULL'
+  - name: PendingRebootTrueLinux
+    action: 'aws:createTags'
+    maxAttempts: 3
+    onFailure: Abort
+    inputs:
+      ResourceType: EC2
+      ResourceIds:
+        - '{{ InstanceId }}'
+      Tags:
+        - Key: PendingReboot
+          Value: 'TRUE'
+    isEnd: true
+  - name: PendingRebootFalseLinux
+    action: 'aws:createTags'
+    maxAttempts: 3
+    onFailure: Abort
+    inputs:
+      ResourceType: EC2
+      ResourceIds:
+        - '{{ InstanceId }}'
+      Tags:
+        - Key: 2wPendingReboot
+          Value: 'FALSE'
+    isEnd: true
+  - name: PendingRebootUnknownLinux
+    action: 'aws:createTags'
+    maxAttempts: 3
+    onFailure: Abort
+    inputs:
+      ResourceType: EC2
+      ResourceIds:
+        - '{{ InstanceId }}'
+      Tags:
+        - Key: PendingReboot
+          Value: UNKNOWN
+    isEnd: true
+  - name: PendingRebootTrueWindows
+    action: 'aws:createTags'
+    maxAttempts: 3
+    onFailure: Abort
+    inputs:
+      ResourceType: EC2
+      ResourceIds:
+        - '{{ InstanceId }}'
+      Tags:
+        - Key: PendingReboot
+          Value: 'TRUE'
+    isEnd: true
+  - name: PendingRebootFalseWindows
+    action: 'aws:createTags'
+    maxAttempts: 3
+    onFailure: Abort
+    inputs:
+      ResourceType: EC2
+      ResourceIds:
+        - '{{ InstanceId }}'
+      Tags:
+        - Key: PendingReboot
+          Value: 'FALSE'
+    isEnd: true
+  - name: PendingRebootUnknownWindows
+    action: 'aws:createTags'
+    maxAttempts: 3
+    onFailure: Abort
+    inputs:
+      ResourceType: EC2
+      ResourceIds:
+        - '{{ InstanceId }}'
+      Tags:
+        - Key: PendingReboot
+          Value: UNKNOWN
+    isEnd: true

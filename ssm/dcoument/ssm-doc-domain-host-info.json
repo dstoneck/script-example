@@ -1,0 +1,74 @@
+{
+    "schemaVersion": "2.2",
+    "description": "Confirm and collect data needed for domain join\nScript isn intended for Domain Join Automation",
+    "parameters":{
+        "domainaddr":{
+            "type":"String",
+            "default":"corp.dom",
+            "description":"Enter the Domain Address. Example: corp.com"
+        },
+        "domainou":{
+            "type":"String",
+            "default":"OU=AWS Servers,OU=AWS",
+            "description":"The base OU path for AWS Location"
+        },
+        "domainenv":{
+            "type":"String",
+            "default":"",
+            "description":"Environment The instance need to be in. Example: PROD, Stage, Dev",
+            "allowedValues": [
+                "PROD",
+                "Stage",
+                "Dev"
+              ]
+        },
+        "hostname":{
+            "type":"String",
+            "default":"",
+            "description":"Only update field if the hostname needs to be changed"
+        }
+    },
+    "mainSteps":[
+        {
+            "precondition": {
+                "StringEquals": [
+                "platformType",
+                "Windows"
+            ]
+            },
+            "action": "aws:runPowerShellScript",
+            "name": "runPowerShellScript",
+            "inputs": {
+                "runCommand": [
+                    "$ininfo = Get-EC2InstanceMetadata -Category IdentityDocument | ConvertFrom-Json",
+                    "$dcenv = \"{{domainenv}}\"",
+                    "$dcaddr = \"{{domainaddr}}\"",
+                    "$oupath = \"{{domainou}}\"",
+                    "$hname = \"{{hostname}}\"",
+
+                    "try {",
+                    "    Test-ComputerSecureChannel",
+                    "    Exit 0",
+                    "} catch {}",
+                    "switch($ininfo.region) {",
+                    "    \"us-east-1\" {$region = \"UE\"}",
+                    "    \"eu-central-1\" {$region = \"EU\"}",
+                    "    \"ap-southeast-1\" {$region = \"AP\"}",
+                    "}",
+                    "$dctemp = \"\"",
+                    "foreach ($i in $dcaddr.Split(\".\")){",
+                    "    $dctemp = $dctemp + \"DC=$i,\"",
+                    "}",
+                    "$dctemp = $dctemp.Substring(0,$dctemp.Length-1)",
+                    "$dcou = \"OU=$dcenv,OU=$region,$oupath,$dctemp\"",
+                    "if (hname){",
+                    "    try {",
+                    "        Rename-Computer -NewName $hanme -Restart",
+                    "    } catch { }",                    
+                    "return $dcou"
+                ]
+            }
+        }
+    ]
+    }
+        

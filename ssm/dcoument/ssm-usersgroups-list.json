@@ -1,0 +1,47 @@
+{
+    "schemaVersion": "2.2",
+    "description": "Scan local windows groups for list of user and groups",
+    "parameters": {
+      "scangroup": {
+        "type": "String",
+        "default": "Administrators",
+        "description": "The Group to scan on the Windows Host system for users/groups"
+      }
+    },
+    "mainSteps": [
+      {
+        "precondition": {
+          "StringEquals": [
+            "platformType",
+            "Windows"
+          ]
+        },
+        "action": "aws:runPowerShellScript",
+        "name": "runPowerShellScript",
+        "inputs": {
+          "runCommand": [
+            "$scangroup = \"{{scangroup}}\"",
+            "$hname = hostname",
+            "$ininfo = Get-EC2InstanceMetadata -Category IdentityDocument | ConvertFrom-Json",
+            "function win2012 {",
+            "    param ($sgroup)",
+            "    $administrators = @(",
+            "    ([ADSI]\"WinNT://./$sgroup\").psbase.Invoke('Members') |",
+            "    ForEach-Object {",
+            "        $_.GetType().InvokeMember('AdsPath', 'GetProperty', $null, $($_), $null)",
+            "    }",
+            "    ) -match '^WinNT';",
+            "    $administrators = $administrators -replace 'WinNT://', ''",
+            "    return $administrators",
+            "}",
+            "$adminlist = win2012 $scangroup",
+            "foreach ($i in $adminlist){",
+            "    $lineout =  $ininfo.accountId + \",\" + $ininfo.region + \",\" + $ininfo.instanceId + \",\" + $hname + \",\" + $i",
+            "    $lineout -replace (' ')",
+            "    Write-Output $lineout",
+            "}"
+          ]
+        }
+      }
+    ]
+  }
