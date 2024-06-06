@@ -1,11 +1,11 @@
 # this script is to determine if the date is true or false if past the targeted date
 
+# Example 2nd-date-true=false.ps1 -find 2 -weekday Tuesday -date 10/20/2024
+
 Param (
         [Parameter(Mandatory=$true)][ValidateSet("First","Second","Third","Fourth","Last","1","2","3","4","5")][string]$find,
         [Parameter(Mandatory=$true)][ValidateSet("Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday")][string]$weekday,
         [Parameter(Mandatory=$true)][datetime]$date
-        #[Parameter(Mandatory=$true)][ValidatePattern('^\d{4}$')][int]$year,
-        #[Parameter(Mandatory=$true)][ValidatePattern('^\d{2}$')][int]$numday
     )
 switch($find) 
     { 
