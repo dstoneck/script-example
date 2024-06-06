@@ -45,7 +45,7 @@ switch ($intFind) {
     Default { $di = "error"}
 }
 
-if ($output -lt $date) {
+if ($date.day -ge $output.day) {
     Write-Host -ForegroundColor Green "The date ($date) is passed the $di $weekday of the month"
 } else {
     Write-Host -ForegroundColor Red "The date ($date) is not passed the $di $weekday of the month"
